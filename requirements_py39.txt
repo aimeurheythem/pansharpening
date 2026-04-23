@@ -1,0 +1,56 @@
+# =============================================================================
+# PANSHARPENING PRO — Requirements
+# Professor Guellil's Dataset Suite (2024-2026)
+# Compatible: Python 3.9 | CUDA 11.8 or 12.1
+# =============================================================================
+
+# ── Core Deep Learning ────────────────────────────────────────────────────────
+# Install PyTorch separately via conda (see README.md):
+# conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia
+torch>=2.1.0
+torchvision>=0.16.0
+
+# ── Remote Sensing & Geospatial I/O ──────────────────────────────────────────
+rasterio             # Cleaner satellite imagery I/O (wraps GDAL)
+pyproj               # CRS / projection handling
+shapely              # Geometry operations
+h5py                # HDF5 — PanBench & legacy datasets
+tifffile         # GeoTIFF read/write
+opencv-python     # Fast image processing
+Pillow              # Basic image I/O
+
+# ── Scientific Computing ──────────────────────────────────────────────────────
+numpy
+scipy
+scikit-image        # SSIM, structural metrics, filters
+scikit-learn         # PCA, normalization helpers
+
+# ── Model Architecture Deps ───────────────────────────────────────────────────
+einops               # Tensor reshaping (Transformers, ScaleFormer)
+timm                # ViT backbones, attention blocks
+diffusers           # Diffusion model support
+accelerate          # Multi-GPU / mixed precision
+transformers        # HuggingFace tokenizers/encoders
+PyWavelets           # Wavelet transforms (Wav-CBT model)
+
+# ── Experiment Tracking & Visualization ──────────────────────────────────────
+tensorboard
+wandb               # Professional experiment tracking
+matplotlib
+seaborn
+plotly              # Interactive comparison plots
+
+# ── Configuration & Utilities ─────────────────────────────────────────────────
+PyYAML               # YAML config files
+omegaconf            # Hierarchical config management
+python-dotenv        # .env path management
+rich                # Beautiful terminal output
+tqdm                # Progress bars
+
+# ── Data Download ─────────────────────────────────────────────────────────────
+gdown                # Google Drive download (PanBench)
+requests
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest
+pytest-cov

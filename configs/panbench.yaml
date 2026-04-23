@@ -1,0 +1,32 @@
+# =============================================================================
+# PANBENCH CONFIG — Remote Sensing 2024
+# Dataset: PanBench (Multi-satellite benchmark, MS:256×256, PAN:1024×1024)
+# Drive: https://drive.google.com/file/d/1fjwvRrCmExk02c5sxGXMoSvGdGL0FbYR/view
+# =============================================================================
+
+defaults:
+  - base
+
+model:
+  name: "wav_cbt" # ScaleFormer | Wav-CBT
+  ms_channels: 3  # Changed to 3 for RGB data (was 8 for WV3)
+  pan_channels: 1
+  num_features: 64
+  num_blocks: 4
+
+dataset:
+  name: "panbench"
+  h5_train: "./data/h5/train_wv3.h5"
+  h5_val:   "./data/h5/valid_wv3.h5"
+  h5_test:  "./data/h5/test_wv3.h5"
+  satellites:
+    - wv3                    # WorldView-3 (8 bands)
+    - gf2                    # GaoFen-2 (4 bands)
+    - qb                     # QuickBird (4 bands)
+  ms_size: 256
+  pan_size: 1024
+  scale_ratio: 4
+
+training:
+  epochs: 200
+  batch_size: 32

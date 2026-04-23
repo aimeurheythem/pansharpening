@@ -1,0 +1,41 @@
+# =============================================================================
+# SCALEFORMER CONFIG — CVPR 2026
+# Dataset: PanScale (Multi-scene, Cross-Scale, Variable resolution)
+# Paper: "Cross-Scale Pansharpening via ScaleFormer and the PanScale Datasets"
+# Code:  https://github.com/caoke-963/ScaleFormer
+# =============================================================================
+
+defaults:
+  - base
+
+model:
+  name: "scaleformer"
+  ms_channels: 4             # Multispectral bands (PanScale default)
+  pan_channels: 1
+  embed_dim: 64
+  num_heads: 8
+  num_layers: 6
+  window_size: 8             # Swin-style local attention window
+  mlp_ratio: 4.0
+  dropout: 0.1
+  scale_ratios: [4, 8, 16]   # Cross-scale factors for PanScale
+
+dataset:
+  name: "pansscale"
+  train_path: "./data/raw/PanScale/train"
+  val_path:   "./data/raw/PanScale/val"
+  test_path:  "./data/raw/PanScale/test"
+  ms_channels: 4
+  pan_channels: 1
+  patch_size: 64             # MS patch size
+  augmentation: true
+
+training:
+  epochs: 300
+  batch_size: 16             # Cross-scale needs more GPU memory
+  lr: 5.0e-5
+
+loss:
+  spectral_weight: 1.0
+  spatial_weight: 0.5
+  perceptual_weight: 0.1

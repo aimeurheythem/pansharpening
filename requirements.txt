@@ -1,0 +1,56 @@
+# =============================================================================
+# PANSHARPENING PRO — Requirements
+# Professor Guellil's Dataset Suite (2024-2026)
+# Compatible: Python 3.9 | CUDA 11.8 or 12.1
+# =============================================================================
+
+# ── Core Deep Learning ────────────────────────────────────────────────────────
+# Install PyTorch separately via conda (see README.md):
+# conda install pytorch==2.1.2 torchvision==0.16.2 pytorch-cuda=12.1 -c pytorch -c nvidia
+torch>=2.1.0
+torchvision>=0.16.0
+
+# ── Remote Sensing & Geospatial I/O ──────────────────────────────────────────
+rasterio==1.3.9             # Cleaner satellite imagery I/O (wraps GDAL)
+pyproj==3.6.1               # CRS / projection handling
+shapely==2.0.3              # Geometry operations
+h5py==3.10.0                # HDF5 — PanBench & legacy datasets
+tifffile==2024.2.12         # GeoTIFF read/write
+opencv-python==4.9.0.80     # Fast image processing
+Pillow==10.2.0              # Basic image I/O
+
+# ── Scientific Computing ──────────────────────────────────────────────────────
+numpy==1.26.4
+scipy==1.12.0
+scikit-image==0.22.0        # SSIM, structural metrics, filters
+scikit-learn==1.4.1         # PCA, normalization helpers
+
+# ── Model Architecture Deps ───────────────────────────────────────────────────
+einops==0.7.0               # Tensor reshaping (Transformers, ScaleFormer)
+timm==0.9.16                # ViT backbones, attention blocks
+diffusers==0.25.0           # Diffusion model support
+accelerate==0.26.0          # Multi-GPU / mixed precision
+transformers==4.37.2        # HuggingFace tokenizers/encoders
+PyWavelets==1.6.0           # Wavelet transforms (Wav-CBT model)
+
+# ── Experiment Tracking & Visualization ──────────────────────────────────────
+tensorboard==2.15.1
+wandb==0.16.3               # Professional experiment tracking
+matplotlib==3.8.2
+seaborn==0.13.2
+plotly==5.19.0              # Interactive comparison plots
+
+# ── Configuration & Utilities ─────────────────────────────────────────────────
+PyYAML==6.0.1               # YAML config files
+omegaconf==2.3.0            # Hierarchical config management
+python-dotenv==1.0.1        # .env path management
+rich==13.7.0                # Beautiful terminal output
+tqdm==4.66.1                # Progress bars
+
+# ── Data Download ─────────────────────────────────────────────────────────────
+gdown==5.1.0                # Google Drive download (PanBench)
+requests==2.31.0
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.0.0
+pytest-cov==4.1.0

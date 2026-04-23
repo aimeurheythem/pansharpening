@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environments
+.env
+.venv
+venv/
+env/
+
+# Data (too large for git)
+data/h5/*.h5
+data/raw/
+*.tif
+*.zip
+
+# Checkpoints (track best ones manually)
+checkpoints/
+!checkpoints/.gitkeep
+
+# Logs
+logs/
+wandb/
+
+# Outputs
+outputs/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Results CSVs (can be large)
+results/*.csv
+
+# Documentation files
+*.md
+*.pdf
+
+# Archives and binaries
+*.zip
+*.exe
+*.pyd
+*.dll
+
+# Unnecessary project directories
+pyenv-win-master/
+python39-embed/
+temp_fix.txt
+virtualenv.pyz

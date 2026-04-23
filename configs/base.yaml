@@ -1,0 +1,57 @@
+# =============================================================================
+# BASE CONFIGURATION — pansharpening_pro
+# All model configs inherit from this file
+# =============================================================================
+
+project:
+  name: "pansharpening_pro"
+  version: "1.0.0"
+  seed: 42
+  experiment_id: null        # auto-generated if null
+
+paths:
+  data_root: "./data"
+  h5_dir: "./data/h5"
+  raw_dir: "./data/raw"
+  checkpoints: "./checkpoints"
+  logs: "./logs"
+  outputs: "./outputs"
+
+hardware:
+  device: "cuda"             # cuda | cpu
+  num_workers: 4
+  pin_memory: true
+  fp16: true                 # Mixed precision (saves ~40% GPU memory)
+
+training:
+  epochs: 200
+  batch_size: 32
+  val_interval: 5            # Validate every N epochs
+  save_interval: 10
+  early_stopping_patience: 30
+
+optimizer:
+  name: "adam"               # adam | adamw | sgd
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+
+scheduler:
+  name: "cosine"             # cosine | step | plateau
+  T_max: 200
+  eta_min: 1.0e-7
+
+logging:
+  tensorboard: true
+  wandb: false               # Set to true and add WANDB_API_KEY in .env
+  wandb_project: "pansharpening_pro"
+  log_images_interval: 20    # Log sample images every N epochs
+
+# Evaluation metrics (all reported in final benchmark table)
+metrics:
+  - SAM                      # Spectral Angle Mapper (↓ better)
+  - ERGAS                    # Erreur Relative Globale (↓ better)
+  - Q4                       # Universal Image Quality Index (↑ better)
+  - SCC                      # Spatial Correlation Coefficient (↑ better)
+  - PSNR                     # Peak Signal-to-Noise Ratio (↑ better)
+  - SSIM                     # Structural Similarity Index (↑ better)

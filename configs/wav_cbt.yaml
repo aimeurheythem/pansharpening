@@ -1,0 +1,40 @@
+# =============================================================================
+# WAV-CBT CONFIG — European J. Remote Sens. 2025
+# Dataset: Sev2Mod (Geostationary + Polar satellite, Variable resolution)
+# Paper: Wavelet-based Cross-Band Transformer
+# Code:  https://github.com/VisionVoyagerX/Wav-CBT
+# =============================================================================
+
+defaults:
+  - base
+
+model:
+  name: "wav_cbt"
+  ms_channels: 3             # Sev2Mod RGB-equivalent bands
+  pan_channels: 1
+  wavelet: "haar"            # Wavelet family: haar | db2 | sym4
+  num_levels: 3              # Decomposition levels
+  embed_dim: 48
+  num_heads: 6
+  num_transformer_blocks: 4
+  mlp_ratio: 4.0
+
+dataset:
+  name: "sev2mod"
+  train_path: "./data/raw/Sev2Mod/train"
+  val_path:   "./data/raw/Sev2Mod/val"
+  test_path:  "./data/raw/Sev2Mod/test"
+  ms_channels: 3
+  pan_channels: 1
+  patch_size: 64
+  augmentation: true
+
+training:
+  epochs: 200
+  batch_size: 32
+  lr: 1.0e-4
+
+loss:
+  l1_weight: 1.0
+  ssim_weight: 0.5
+  wavelet_weight: 0.2
