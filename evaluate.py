@@ -9,6 +9,16 @@ Produces:
     - Console table (SAM, ERGAS, Q4, SCC, PSNR, SSIM per model)
     - results/benchmark_wv3.csv
     - results/visual_comparison.png
+
+FIXES applied vs original:
+    FIX 1: evaluate_model() now clamps pred/gt to [0,1] before numpy conversion.
+            Original code passed raw float tensors directly — under FP16, model
+            outputs can drift slightly outside [0,1], corrupting metric values.
+
+    FIX 2: evaluate_model() now uses autocast() for consistency with validate()
+            in train.py. Without this, FP16-trained models evaluated in FP32
+            may see a small mismatch due to BatchNorm statistics differences.
+            Also prevents OOM errors when running on large test batches.
 """
 
 import argparse
@@ -17,6 +27,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.cuda.amp import autocast
 from omegaconf import OmegaConf
 from rich.console import Console
 from rich.table import Table
@@ -29,9 +40,18 @@ console = Console()
 
 
 @torch.no_grad()
-def evaluate_model(model: nn.Module, loader, device: torch.device,
-                    scale_ratio: int = 4) -> dict:
-    """Run inference on test set and return all metrics."""
+def evaluate_model(
+    model: nn.Module,
+    loader,
+    device: torch.device,
+    scale_ratio: int = 4,
+    fp16: bool = False,
+) -> dict:
+    """Run inference on test set and return all metrics.
+
+    FIX 1: Clamp pred and gt to [0,1] before metric computation.
+    FIX 2: Use autocast for consistency with training-time validate().
+    """
     model.eval()
     tracker = MetricTracker()
 
@@ -40,10 +60,16 @@ def evaluate_model(model: nn.Module, loader, device: torch.device,
         lrms = batch["lrms"].to(device)
         gt   = batch["gt"].to(device)
 
-        pred = model(pan, lrms).float()
+        # FIX 2: Use autocast — matches FP16-trained model's inference precision
+        with autocast(enabled=fp16):
+            pred = model(pan, lrms)
+
+        # FIX 1: Explicit clamp before numpy conversion
+        pred = pred.float().clamp(0.0, 1.0)
+        gt   = gt.float().clamp(0.0, 1.0)
 
         pred_np = pred.cpu().numpy()
-        gt_np   = gt.float().cpu().numpy()
+        gt_np   = gt.cpu().numpy()
         tracker.update_batch(gt_np, pred_np, ratio=scale_ratio)
 
     return tracker.compute()
@@ -111,7 +137,12 @@ def main():
     cfg = OmegaConf.merge(base_cfg, model_cfg)
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-    console.print(f"\n[bold]Evaluation[/bold] | Satellite: [cyan]{args.satellite}[/cyan] | Device: {device}\n")
+    fp16   = cfg.hardware.fp16
+    console.print(
+        f"\n[bold]Evaluation[/bold] | "
+        f"Satellite: [cyan]{args.satellite}[/cyan] | "
+        f"Device: {device} | FP16: {fp16}\n"
+    )
 
     # ── Load test data ─────────────────────────────────────────────────────────
     loaders = get_panbench_loaders(
@@ -139,7 +170,7 @@ def main():
 
     # ── Evaluate ───────────────────────────────────────────────────────────────
     scale_ratio = cfg.dataset.get("scale_ratio", 4)
-    metrics = evaluate_model(model, test_loader, device, scale_ratio=scale_ratio)
+    metrics = evaluate_model(model, test_loader, device, scale_ratio=scale_ratio, fp16=fp16)
     results = {model_name: metrics}
 
     # ── Output ─────────────────────────────────────────────────────────────────

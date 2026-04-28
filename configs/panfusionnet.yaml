@@ -1,0 +1,48 @@
+# =============================================================================
+# PANFUSIONNET CONFIG — Hybrid CNN + Transformer
+# Architecture: Dual CNN Encoder → Cross-Modal Transformer Fusion → CNN Refine
+# =============================================================================
+
+defaults:
+  - base
+
+model:
+  name: "panfusionnet"
+  ms_channels: 8           # WorldView-3 has 8 MS bands (change to 4 for GF2/QB)
+  pan_channels: 1
+  embed_dim: 64            # Internal feature dimension (D)
+  num_heads: 4             # Attention heads in CMTF (must divide embed_dim)
+  num_cnn_blocks: 4        # ResBlocks per CNN encoder branch
+  num_attn_layers: 2       # Cross-attention depth (2 is efficient and sufficient)
+  token_size: 16           # T×T = 256 spatial tokens for attention
+  dropout: 0.0
+
+dataset:
+  name: "panbench"
+  h5_train: "./data/h5/train_wv3.h5"
+  h5_val:   "./data/h5/valid_wv3.h5"
+  h5_test:  "./data/h5/test_wv3.h5"
+  satellites:
+    - wv3
+  scale_ratio: 4
+
+training:
+  epochs: 200
+  batch_size: 16           # Reduced vs wav_cbt because of Transformer memory overhead
+  accum_steps: 2           # Effective batch = 16 × 2 = 32
+  warmup_epochs: 10        # Linear warmup then cosine decay
+
+optimizer:
+  name: "adamw"
+  lr: 2.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+
+scheduler:
+  name: "cosine_warmup"    # Linear warmup + cosine decay (no separate 'transformers' dep)
+  eta_min: 1.0e-6
+
+loss:
+  l1_weight: 1.0
+  ssim_weight: 0.5
+  sam_weight: 0.1

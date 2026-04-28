@@ -2,18 +2,22 @@
 losses.py — Loss functions for pansharpening training
 
 Includes:
-  - HybridPanLoss:      Spectral (L1) + Spatial (SSIM) + SAM
-  - WaveletLoss:        Multi-scale wavelet consistency (for Wav-CBT)
-  - PerceptualLoss:     VGG feature-space loss (for ScaleFormer)
-  - SpectralSpatialLoss: All-in-one configurable loss
+  - HybridPanLoss:   Spectral (L1) + Spatial (SSIM) + SAM
+  - WaveletLoss:     Multi-scale wavelet consistency (for Wav-CBT)
+  - PerceptualLoss:  VGG feature-space loss (for ScaleFormer)
+
+FIXED:
+  - WaveletLoss._dwt_loss previously used pywt + numpy, which:
+      (a) detached gradients entirely — the wavelet term had ZERO gradient
+      (b) ran on CPU per sample/channel — extreme throughput bottleneck
+    Now uses a pure-PyTorch differentiable Haar DWT (GPU-compatible, fully
+    differentiable, equivalent result to the analytical Haar transform).
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
-import pywt
-import numpy as np
 
 
 # =============================================================================
@@ -28,7 +32,7 @@ class L1Loss(nn.Module):
 class SSIMLoss(nn.Module):
     """
     Differentiable SSIM loss.  1 - SSIM (minimized during training).
-    Window: Gaussian kernel with sigma=1.5 over 11×11 neighborhood.
+    Window: Gaussian kernel with sigma=1.5 over 11x11 neighborhood.
     """
     def __init__(self, window_size: int = 11, channel: int = 1):
         super().__init__()
@@ -73,13 +77,49 @@ class SAMLoss(nn.Module):
 
 
 # =============================================================================
+# DIFFERENTIABLE HAAR DWT — replaces pywt (GPU-compatible, gradient-preserving)
+# =============================================================================
+
+class HaarDWT2D(nn.Module):
+    """
+    Differentiable 2D Haar Discrete Wavelet Transform using fixed-weight Conv2d.
+
+    Unlike pywt-based approaches, this:
+      - Runs entirely on GPU (no CPU/numpy round-trip)
+      - Preserves the full gradient computation graph
+      - Is analytically equivalent to the Haar DWT
+
+    Returns 4 subbands: LL, LH, HL, HH — each (B, C, H/2, W/2)
+    """
+    def __init__(self):
+        super().__init__()
+        # LL: average both dims | LH: avg H, diff W
+        # HL: diff H, avg W    | HH: diff both dims
+        h = torch.tensor([[1.,  1.], [ 1.,  1.]]) / 2.0
+        g = torch.tensor([[1., -1.], [ 1., -1.]]) / 2.0
+        v = torch.tensor([[1.,  1.], [-1., -1.]]) / 2.0
+        d = torch.tensor([[1., -1.], [-1.,  1.]]) / 2.0
+        # Stack as a single (4, 1, 2, 2) filter bank
+        filters = torch.stack([h, g, v, d], dim=0).unsqueeze(1)  # (4,1,2,2)
+        self.register_buffer("filters", filters)
+
+    def forward(self, x: torch.Tensor) -> tuple:
+        B, C, H, W = x.shape
+        x_flat = x.reshape(B * C, 1, H, W)
+        out = F.conv2d(x_flat, self.filters, stride=2, padding=0)  # (B*C, 4, H/2, W/2)
+        out = out.reshape(B, C, 4, H // 2, W // 2)
+        LL, LH, HL, HH = out.unbind(dim=2)
+        return LL, LH, HL, HH
+
+
+# =============================================================================
 # COMPOSITE LOSSES
 # =============================================================================
 
 class HybridPanLoss(nn.Module):
     """
     Standard hybrid loss for pansharpening (spectral + spatial + SAM).
-    
+
     Default weights tuned for WV3 PanBench benchmark.
     Adjust 'sam_w' upwards for datasets with high spectral complexity (WV3).
     Adjust 'ssim_w' upwards for datasets with rich spatial texture (PanScale).
@@ -100,7 +140,7 @@ class HybridPanLoss(nn.Module):
         self,
         pred: torch.Tensor,
         target: torch.Tensor
-    ) -> tuple[torch.Tensor, dict]:
+    ) -> tuple:
         l1_loss   = self.l1(pred, target)
         ssim_loss = self.ssim(pred, target)
         sam_loss  = self.sam(pred, target)
@@ -118,50 +158,80 @@ class HybridPanLoss(nn.Module):
 class WaveletLoss(nn.Module):
     """
     Multi-scale wavelet consistency loss for Wav-CBT.
-    Decomposes both pred and target using DWT and computes L1 on subbands.
+
+    Decomposes pred and target using a differentiable Haar DWT and
+    computes L1 on each high-frequency subband (LH, HL, HH).
+
+    FIX: The original implementation used pywt + numpy which had two bugs:
+      BUG 1 — pred.detach().cpu().numpy() cut the gradient graph entirely.
+               The wavelet component contributed ZERO gradient during backprop,
+               making it a monitoring value, not a training signal.
+      BUG 2 — CPU round-trip per sample/channel was an extreme bottleneck.
+    This version uses a fully differentiable GPU Haar DWT instead.
 
     Args:
-        wavelet:   PyWavelets wavelet name ('haar', 'db2', 'sym4')
-        levels:    Decomposition levels
-        l1_w:      L1 pixel loss weight
-        wav_w:     Wavelet subband loss weight
-        ssim_w:    SSIM loss weight
+        levels:   DWT decomposition levels (default 2)
+        l1_w:     L1 pixel loss weight
+        wav_w:    Wavelet subband loss weight
+        ssim_w:   SSIM loss weight
     """
     def __init__(
         self,
-        wavelet: str = "haar",
-        levels: int = 3,
-        l1_w: float = 1.0,
-        wav_w: float = 0.2,
-        ssim_w: float = 0.5
+        levels:  int   = 2,
+        l1_w:    float = 1.0,
+        wav_w:   float = 0.2,
+        ssim_w:  float = 0.5,
     ):
         super().__init__()
-        self.wavelet = wavelet
         self.levels  = levels
         self.l1_w, self.wav_w, self.ssim_w = l1_w, wav_w, ssim_w
         self.l1   = L1Loss()
         self.ssim = SSIMLoss()
+        self.dwt  = HaarDWT2D()
 
-    def _dwt_loss(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """Compute wavelet subband L1 loss for a single band."""
-        p_np = pred.detach().cpu().numpy()
-        t_np = target.detach().cpu().numpy()
-        total = 0.0
-        for b in range(p_np.shape[0]):    # batch
-            for c in range(p_np.shape[1]):  # channel
-                coeffs_p = pywt.wavedec2(p_np[b, c], self.wavelet, level=self.levels)
-                coeffs_t = pywt.wavedec2(t_np[b, c], self.wavelet, level=self.levels)
-                for cp, ct in zip(coeffs_p[1:], coeffs_t[1:]):   # skip LL (already in L1)
-                    for sp, st in zip(cp, ct):                    # LH, HL, HH subbands
-                        total += np.mean(np.abs(sp - st))
-        return torch.tensor(total / (p_np.shape[0] * p_np.shape[1]), device=pred.device)
+    def _multiscale_wavelet_loss(
+        self, pred: torch.Tensor, target: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Multi-level Haar DWT loss on high-frequency subbands.
+
+        Entirely differentiable — runs on GPU — gradients flow through
+        every level of decomposition back to the network output.
+        """
+        loss = pred.new_zeros(1).squeeze()  # scalar zero, same device/dtype
+        p, t = pred, target
+
+        for level in range(self.levels):
+            # Pad to even spatial dims if needed
+            if p.shape[-2] % 2 != 0:
+                p = F.pad(p, (0, 0, 0, 1))
+                t = F.pad(t, (0, 0, 0, 1))
+            if p.shape[-1] % 2 != 0:
+                p = F.pad(p, (0, 1, 0, 0))
+                t = F.pad(t, (0, 1, 0, 0))
+
+            p_LL, p_LH, p_HL, p_HH = self.dwt(p)
+            t_LL, t_LH, t_HL, t_HH = self.dwt(t)
+
+            # High-frequency subband L1 (deeper levels get lower weight)
+            level_weight = 1.0 / (2 ** level)
+            loss = loss + level_weight * (
+                F.l1_loss(p_LH, t_LH) +
+                F.l1_loss(p_HL, t_HL) +
+                F.l1_loss(p_HH, t_HH)
+            )
+
+            # Recurse on LL for next decomposition level
+            p, t = p_LL, t_LL
+
+        return loss
 
     def forward(
         self, pred: torch.Tensor, target: torch.Tensor
-    ) -> tuple[torch.Tensor, dict]:
-        l1_loss  = self.l1(pred, target)
-        wav_loss = self._dwt_loss(pred, target)
-        ssim_loss= self.ssim(pred, target)
+    ) -> tuple:
+        l1_loss   = self.l1(pred, target)
+        wav_loss  = self._multiscale_wavelet_loss(pred, target)
+        ssim_loss = self.ssim(pred, target)
 
         total = self.l1_w * l1_loss + self.wav_w * wav_loss + self.ssim_w * ssim_loss
         components = {
@@ -192,7 +262,6 @@ class PerceptualLoss(nn.Module):
             self.slice2 = None
 
     def _to_3ch(self, x: torch.Tensor) -> torch.Tensor:
-        """Replicate first 3 channels if input has more/fewer."""
         if x.shape[1] == 3:
             return x
         if x.shape[1] > 3:
@@ -221,10 +290,10 @@ LOSS_REGISTRY = {
 def get_loss(name: str, **kwargs) -> nn.Module:
     """
     Factory function to instantiate loss by name.
-    
+
     Usage:
-        loss_fn = get_loss("hybrid", l1_w=1.0, ssim_w=0.5, sam_w=0.1)
-        loss_fn = get_loss("wavelet", wavelet="haar", levels=3)
+        loss_fn = get_loss("hybrid",  l1_w=1.0, ssim_w=0.5, sam_w=0.1)
+        loss_fn = get_loss("wavelet", levels=2, wav_w=0.2)
     """
     if name not in LOSS_REGISTRY:
         raise ValueError(f"Unknown loss '{name}'. Available: {list(LOSS_REGISTRY)}")

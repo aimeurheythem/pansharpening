@@ -2,19 +2,51 @@
 train.py — Main training entry point for pansharpening
 
 Usage:
-    python train.py --config configs/panbench.yaml
-    python train.py --config configs/scaleformer.yaml --wandb
-    python train.py --config configs/wav_cbt.yaml     --resume checkpoints/wav_cbt/last.pth
+    python train.py --config configs/panfusionnet.yaml
+    python train.py --config configs/scaleformer.yaml  --wandb
+    python train.py --config configs/wav_cbt.yaml      --resume checkpoints/wav_cbt/last.pth
 
 Supports:
     - Mixed precision (FP16) training via torch.cuda.amp
     - WandB + TensorBoard logging
     - Automatic checkpointing (best val + periodic)
-    - All 6 datasets
+    - Gradient accumulation (accum_steps in config)
+    - Linear LR warmup + cosine decay (no external scheduler library needed)
+
+FIXES applied vs original:
+    FIX 1: validate() now clamps pred/gt to [0,1] before numpy conversion.
+            Under FP16, model outputs can have tiny out-of-range values even
+            after model-level .clamp() due to float precision — explicit clamp
+            here is the safe guard for metric correctness.
+
+    FIX 2: [ChatGPT ERROR 2 assessed as NOT a bug]
+            lrms from PanBench HDF5 is already bicubic-upsampled to PAN
+            resolution (documented in panbench.py: lrms key = upsampled).
+            Both model forward() signatures confirm: lrms: (B,C,H_pan,W_pan).
+            No upsampling needed here — added assertion in models instead.
+
+    FIX 3: [ChatGPT ERROR 3 assessed as NOT a bug]
+            HybridPanLoss already uses L1+SSIM+SAM with identical weights
+            to what ChatGPT suggests. No change needed.
+
+    FIX 4: Gradient accumulation (accum_steps) added. Effective batch size =
+            batch_size * accum_steps without extra GPU memory.
+
+    FIX 5: LR warmup added via cosine_warmup scheduler. Uses PyTorch
+            LambdaLR — no external libraries required.
+
+    FIX 6: LR now logged to TensorBoard every epoch.
+
+    FIX 7 (ChatGPT missed): Train losses were only logged at val_interval
+            (every N epochs), silently dropping all in-between epochs.
+            Now logged every epoch independently of validation.
+
+    FIX 8 (ChatGPT missed): WaveletLoss had zero gradients — fixed in losses.py.
 """
 
 import os
 import sys
+import math
 import time
 import argparse
 import random
@@ -54,6 +86,42 @@ def set_seed(seed: int):
 
 
 # =============================================================================
+# SCHEDULER: Linear warmup + cosine decay (no external library needed)
+# =============================================================================
+
+def get_cosine_warmup_scheduler(
+    optimizer,
+    warmup_epochs: int,
+    total_epochs:  int,
+    eta_min_ratio: float = 1e-3,
+):
+    """
+    Linear LR warmup for `warmup_epochs`, then cosine annealing to
+    lr * eta_min_ratio over the remaining epochs.
+
+    Uses PyTorch's built-in LambdaLR — no `transformers` package needed.
+    This is especially important for Transformer models where cold-starting
+    at full LR causes unstable early training and divergence.
+
+    Args:
+        optimizer:      The optimizer to schedule
+        warmup_epochs:  Number of linear warmup epochs
+        total_epochs:   Total training epochs
+        eta_min_ratio:  Final LR = base_lr * eta_min_ratio
+    """
+    def lr_lambda(epoch: int) -> float:
+        if epoch < warmup_epochs:
+            # Linear warmup: 1/W, 2/W, ..., W/W
+            return float(epoch + 1) / float(max(1, warmup_epochs))
+        # Cosine annealing from 1.0 down to eta_min_ratio
+        progress = (epoch - warmup_epochs) / max(1, total_epochs - warmup_epochs)
+        cosine   = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return eta_min_ratio + (1.0 - eta_min_ratio) * cosine
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+# =============================================================================
 # CHECKPOINT UTILITIES
 # =============================================================================
 
@@ -81,6 +149,10 @@ def load_checkpoint(path: str, model: nn.Module, optimizer=None, scheduler=None)
 
 # =============================================================================
 # VALIDATION
+# FIX 1: Clamp pred and gt to [0,1] before numpy conversion.
+#         Models already clamp in forward(), but FP16 autocast can produce
+#         tiny out-of-range values due to float precision.  Explicit clamp
+#         here ensures metrics (SAM, ERGAS, PSNR, SSIM) are always correct.
 # =============================================================================
 
 @torch.no_grad()
@@ -96,9 +168,12 @@ def validate(model, loader, device, cfg) -> dict:
         with autocast(enabled=cfg.hardware.fp16):
             pred = model(pan, lrms)
 
-        # Convert to numpy for metric computation
-        pred_np = pred.float().cpu().numpy()
-        gt_np   = gt.float().cpu().numpy()
+        # FIX 1: Explicit clamp before numpy — guards against FP16 precision drift
+        pred = pred.float().clamp(0.0, 1.0)
+        gt   = gt.float().clamp(0.0, 1.0)
+
+        pred_np = pred.cpu().numpy()
+        gt_np   = gt.cpu().numpy()
         scale   = cfg.dataset.get("scale_ratio", 4)
         tracker.update_batch(gt_np, pred_np, ratio=scale)
 
@@ -107,43 +182,55 @@ def validate(model, loader, device, cfg) -> dict:
 
 # =============================================================================
 # TRAINING LOOP
+# FIX 4: Gradient accumulation via accum_steps.
 # =============================================================================
 
 def train_one_epoch(
-    model, loader, optimizer, loss_fn, scaler, device, cfg, epoch: int
+    model, loader, optimizer, loss_fn, scaler, device, cfg,
+    epoch: int, writer: Optional[object] = None,
 ) -> dict:
     model.train()
-    total_loss = 0.0
     loss_components_sum = {}
-    n_batches = len(loader)
+    n_batches   = len(loader)
+    accum_steps = cfg.training.get("accum_steps", 1)  # FIX 4: gradient accumulation
+
+    optimizer.zero_grad(set_to_none=True)
 
     for i, batch in enumerate(loader):
         pan  = batch["pan"].to(device)
         lrms = batch["lrms"].to(device)
         gt   = batch["gt"].to(device)
 
-        optimizer.zero_grad(set_to_none=True)
-
         with autocast(enabled=cfg.hardware.fp16):
             pred = model(pan, lrms)
             loss, components = loss_fn(pred, gt)
 
-        if cfg.hardware.fp16:
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+        # FIX 4: Scale loss by accumulation steps so gradients are consistent
+        #         regardless of accum_steps value.
+        loss_scaled = loss / accum_steps
 
-        total_loss += loss.item()
+        if cfg.hardware.fp16:
+            scaler.scale(loss_scaled).backward()
+        else:
+            loss_scaled.backward()
+
+        # Optimizer step at the end of each accumulation window
+        if (i + 1) % accum_steps == 0 or (i + 1) == n_batches:
+            if cfg.hardware.fp16:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+
         for k, v in components.items():
             loss_components_sum[k] = loss_components_sum.get(k, 0.0) + v
 
-    return {k: v / n_batches for k, v in loss_components_sum.items()}
+    result = {k: v / n_batches for k, v in loss_components_sum.items()}
+    return result
 
 
 # =============================================================================
@@ -168,7 +255,11 @@ def main():
     # ── Device setup ───────────────────────────────────────────────────────────
     device_str = args.device or cfg.hardware.device
     device = torch.device(device_str if torch.cuda.is_available() else "cpu")
-    console.print(f"\n[bold]PanSharpeningPro[/bold] | Model: [cyan]{cfg.model.name}[/cyan] | Device: [green]{device}[/green]\n")
+    console.print(
+        f"\n[bold]PanSharpeningPro[/bold] | "
+        f"Model: [cyan]{cfg.model.name}[/cyan] | "
+        f"Device: [green]{device}[/green]\n"
+    )
 
     # ── Data loaders ───────────────────────────────────────────────────────────
     console.print("[yellow]Loading datasets...[/yellow]")
@@ -189,8 +280,14 @@ def main():
             f"Add it in data/datasets/ and register here."
         )
 
-    console.print(f"  Train: {len(loaders['train'].dataset):,} samples | "
-                    f"Val: {len(loaders['val'].dataset):,} samples")
+    accum_steps = cfg.training.get("accum_steps", 1)
+    eff_batch   = cfg.training.batch_size * accum_steps
+    console.print(
+        f"  Train: {len(loaders['train'].dataset):,} samples | "
+        f"Val: {len(loaders['val'].dataset):,} samples\n"
+        f"  Batch size: {cfg.training.batch_size} × {accum_steps} accum = "
+        f"[bold]{eff_batch}[/bold] effective"
+    )
 
     # ── Model ──────────────────────────────────────────────────────────────────
     model_kwargs = OmegaConf.to_container(cfg.model, resolve=True)
@@ -211,9 +308,17 @@ def main():
         betas=tuple(opt_cfg.betas),
     )
 
-    # ── Scheduler ─────────────────────────────────────────────────────────────
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=cfg.training.epochs, eta_min=cfg.scheduler.eta_min
+    # ── Scheduler (FIX 5: warmup + cosine) ────────────────────────────────────
+    warmup_epochs = cfg.training.get("warmup_epochs", 10)
+    scheduler = get_cosine_warmup_scheduler(
+        optimizer,
+        warmup_epochs = warmup_epochs,
+        total_epochs  = cfg.training.epochs,
+        eta_min_ratio = cfg.scheduler.eta_min / opt_cfg.lr,  # ratio form
+    )
+    console.print(
+        f"  Scheduler: {warmup_epochs} epoch warmup → cosine decay "
+        f"(eta_min={cfg.scheduler.eta_min:.2e})"
     )
 
     # ── Mixed precision scaler ─────────────────────────────────────────────────
@@ -235,41 +340,47 @@ def main():
         )
 
     # ── Training ───────────────────────────────────────────────────────────────
-    console.print(f"\n[bold green]Starting training for {cfg.training.epochs} epochs...[/bold green]\n")
+    console.print(
+        f"\n[bold green]Starting training for {cfg.training.epochs} epochs...[/bold green]\n"
+    )
 
     for epoch in range(start_epoch, cfg.training.epochs):
         t0 = time.time()
 
         # Train
         train_losses = train_one_epoch(
-            model, loaders["train"], optimizer, loss_fn, scaler, device, cfg, epoch
+            model, loaders["train"], optimizer, loss_fn, scaler, device, cfg, epoch, writer
         )
 
-        # Validate
-        val_metrics = {}
+        # FIX 6 + FIX 7: Log LR and train losses EVERY epoch (not just at val_interval).
+        # Original code silently dropped all epochs that weren't validation epochs.
+        current_lr = optimizer.param_groups[0]["lr"]
+        if writer:
+            for k, v in train_losses.items():
+                writer.add_scalar(f"train/{k}", v, epoch)
+            writer.add_scalar("train/lr", current_lr, epoch)  # FIX 6: LR logging
+
+        # Validate every val_interval epochs
         if (epoch + 1) % cfg.training.val_interval == 0:
-            val_metrics = validate(model, loaders["val"], device, cfg)
+            val_metrics   = validate(model, loaders["val"], device, cfg)
             current_ergas = val_metrics.get("ERGAS", float("inf"))
             is_best       = current_ergas < best_ergas
 
             if is_best:
-                best_ergas = current_ergas
+                best_ergas   = current_ergas
                 patience_counter = 0
             else:
                 patience_counter += 1
 
-            # Log metrics
             if writer:
                 for k, v in val_metrics.items():
                     writer.add_scalar(f"val/{k}", v, epoch)
-                for k, v in train_losses.items():
-                    writer.add_scalar(f"train/{k}", v, epoch)
 
-            # Console output
             elapsed = time.time() - t0
             console.print(
                 f"Epoch [{epoch+1:4d}/{cfg.training.epochs}] "
                 f"Loss={train_losses.get('loss_total', 0):.4f} | "
+                f"LR={current_lr:.2e} | "
                 f"SAM={val_metrics.get('SAM', 0):.3f}° | "
                 f"ERGAS={val_metrics.get('ERGAS', 0):.4f} | "
                 f"PSNR={val_metrics.get('PSNR', 0):.2f}dB | "
@@ -278,30 +389,30 @@ def main():
                 + (" [bold green]← BEST[/bold green]" if is_best else "")
             )
 
-            # Save checkpoint
             if (epoch + 1) % cfg.training.save_interval == 0 or is_best:
                 save_checkpoint(
                     {
-                        "epoch": epoch,
-                        "model": model.state_dict(),
-                        "optimizer": optimizer.state_dict(),
-                        "scheduler": scheduler.state_dict(),
+                        "epoch":       epoch,
+                        "model":       model.state_dict(),
+                        "optimizer":   optimizer.state_dict(),
+                        "scheduler":   scheduler.state_dict(),
                         "best_metric": best_ergas,
                         "val_metrics": val_metrics,
-                        "cfg": OmegaConf.to_container(cfg),
+                        "cfg":         OmegaConf.to_container(cfg),
                     },
                     ckpt_dir / f"epoch_{epoch+1:04d}.pth",
                     is_best=is_best,
                 )
 
-            # Early stopping
             if patience_counter >= cfg.training.early_stopping_patience:
                 console.print(f"\n[red]Early stopping at epoch {epoch+1}[/red]")
                 break
 
         scheduler.step()
 
-    console.print(f"\n[bold green]✓ Training complete! Best ERGAS: {best_ergas:.4f}[/bold green]")
+    console.print(
+        f"\n[bold green]✓ Training complete! Best ERGAS: {best_ergas:.4f}[/bold green]"
+    )
     if writer:
         writer.close()
 
