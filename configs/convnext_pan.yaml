@@ -1,0 +1,50 @@
+# =============================================================================
+# CONVNEXT-PAN CONFIG — Pure CNN Pansharpening Network
+# Architecture: Dual ConvNeXt Encoder → Cross-Modal CNN Fusion → Recon Head
+# Based on: A ConvNet for the 2020s (Liu et al., CVPR 2022)
+# =============================================================================
+
+defaults:
+  - base
+
+model:
+  name: "convnext_pan"
+  ms_channels: 8
+  pan_channels: 1
+  embed_dim: 64
+  num_encoder_blocks: 6
+  num_fusion_blocks: 4
+  num_head_blocks: 2
+  kernel_size: 7
+  expansion: 4
+  drop_path_rate: 0.1
+
+dataset:
+  name: "panbench"
+  h5_train: "./data/h5/train_wv3.h5"
+  h5_val: "./data/h5/valid_wv3.h5"
+  h5_test: "./data/h5/test_wv3.h5"
+  satellites:
+    - wv3
+  scale_ratio: 4
+
+training:
+  epochs: 200
+  batch_size: 16
+  accum_steps: 2
+  warmup_epochs: 10
+
+optimizer:
+  name: "adamw"
+  lr: 2.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+
+scheduler:
+  name: "cosine_warmup"
+  eta_min: 1.0e-6
+
+loss:
+  l1_weight: 1.0
+  ssim_weight: 0.5
+  sam_weight: 0.1

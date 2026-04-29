@@ -12,6 +12,8 @@ Usage:
 from models.scaleformer.scaleformer import ScaleFormer
 from models.wav_cbt.wav_cbt import WavCBT
 from models.panfusionnet.panfusionnet import PanFusionNet
+from models.convnext_pan.convnext_pan import ConvNeXtPan
+from models.pan_pix2pix.pan_pix2pix import PanPix2Pix
 
 
 # =============================================================================
@@ -19,9 +21,11 @@ from models.panfusionnet.panfusionnet import PanFusionNet
 # =============================================================================
 
 _REGISTRY = {
-    "scaleformer":  ScaleFormer,
-    "wav_cbt":      WavCBT,
+    "scaleformer": ScaleFormer,
+    "wav_cbt": WavCBT,
     "panfusionnet": PanFusionNet,
+    "convnext_pan": ConvNeXtPan,
+    "pan_pix2pix": PanPix2Pix,
 }
 
 

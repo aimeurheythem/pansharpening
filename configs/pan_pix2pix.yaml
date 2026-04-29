@@ -1,0 +1,48 @@
+# =============================================================================
+# PAN-PIX2PIX CONFIG — Conditional GAN for Pansharpening
+# Architecture: UNet Generator + PatchGAN Discriminator
+# Based on: Image-to-Image Translation (Isola et al., CVPR 2017)
+# =============================================================================
+
+defaults:
+  - base
+
+model:
+  name: "pan_pix2pix"
+  ms_channels: 8
+  pan_channels: 1
+  base_features: 64
+  n_encoder_layers: 8
+  dropout: 0.0
+  n_disc_layers: 3
+
+dataset:
+  name: "panbench"
+  h5_train: "./data/h5/train_wv3.h5"
+  h5_val: "./data/h5/valid_wv3.h5"
+  h5_test: "./data/h5/test_wv3.h5"
+  satellites:
+    - wv3
+  scale_ratio: 4
+
+training:
+  epochs: 200
+  batch_size: 8
+  accum_steps: 4
+  warmup_epochs: 10
+
+optimizer:
+  name: "adamw"
+  lr: 2.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.5, 0.999]
+
+scheduler:
+  name: "cosine_warmup"
+  eta_min: 1.0e-6
+
+loss:
+  l1_weight: 100.0
+  ssim_weight: 10.0
+  sam_weight: 5.0
+  gan_weight: 1.0

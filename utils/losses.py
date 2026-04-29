@@ -253,8 +253,8 @@ class PerceptualLoss(nn.Module):
         try:
             import torchvision.models as tvm
             vgg = tvm.vgg16(weights=tvm.VGG16_Weights.DEFAULT).features
-            self.slice1 = nn.Sequential(*list(vgg)[:9])    # relu2_2
-            self.slice2 = nn.Sequential(*list(vgg)[9:16])  # relu3_3
+            self.slice1 = nn.Sequential(*list(vgg)[:9]) # relu2_2
+            self.slice2 = nn.Sequential(*list(vgg)[9:16]) # relu3_3
             for p in self.parameters():
                 p.requires_grad = False
         except Exception:
@@ -273,9 +273,140 @@ class PerceptualLoss(nn.Module):
             return torch.tensor(0.0, device=pred.device)
         p3 = self._to_3ch(pred)
         t3 = self._to_3ch(target)
-        f1_p = self.slice1(p3);    f1_t = self.slice1(t3)
-        f2_p = self.slice2(f1_p);  f2_t = self.slice2(f1_t)
+        f1_p = self.slice1(p3); f1_t = self.slice1(t3)
+        f2_p = self.slice2(f1_p); f2_t = self.slice2(f1_t)
         return F.l1_loss(f1_p, f1_t) + F.l1_loss(f2_p, f2_t)
+
+
+# =============================================================================
+# GAN LOSSES — For Pan-Pix2Pix adversarial training
+# =============================================================================
+
+class GANLoss(nn.Module):
+    """
+    Vanilla GAN loss (LSGAN or BCE variant).
+
+    LSGAN (least-squares GAN) uses MSE loss instead of BCE for more
+    stable training and better gradient behavior. This is the standard
+    choice for Pix2Pix-style conditional GANs.
+
+    Args:
+        gan_mode: "lsgan" (MSE, default) or "vanilla" (BCE)
+        target_real: Label value for real samples (default 1.0)
+        target_fake: Label value for fake samples (default 0.0)
+    """
+    def __init__(
+        self,
+        gan_mode: str = "lsgan",
+        target_real: float = 1.0,
+        target_fake: float = 0.0,
+    ):
+        super().__init__()
+        self.gan_mode = gan_mode
+        self.target_real = target_real
+        self.target_fake = target_fake
+        if gan_mode == "lsgan":
+            self.loss_fn = nn.MSELoss()
+        elif gan_mode == "vanilla":
+            self.loss_fn = nn.BCEWithLogitsLoss()
+        else:
+            raise ValueError(f"Unknown gan_mode '{gan_mode}'. Use 'lsgan' or 'vanilla'.")
+
+    def forward(
+        self,
+        prediction: torch.Tensor,
+        is_real: bool,
+    ) -> torch.Tensor:
+        if self.gan_mode == "lsgan":
+            target = torch.full_like(prediction, self.target_real if is_real else self.target_fake)
+            return self.loss_fn(prediction, target)
+        else:
+            target = torch.full_like(
+                prediction, 1.0 if is_real else 0.0,
+            )
+            return self.loss_fn(prediction, target)
+
+
+class Pix2PixLoss(nn.Module):
+    """
+    Composite loss for Pan-Pix2Pix GAN training.
+
+    Generator loss:
+      G_loss = λ_L1 * L1(G(x), y) + λ_SSIM * SSIM(G(x), y) + λ_SAM * SAM(G(x), y)
+               + λ_GAN * GAN_loss(D(G(x), x), real)
+
+    Discriminator loss:
+      D_loss = 0.5 * [GAN_loss(D(y, x), real) + GAN_loss(D(G(x), x), fake)]
+
+    The L1 weight is typically much larger than the GAN weight (λ_L1=100, λ_GAN=1)
+    following the original Pix2Pix paper, which found that L1 dominates for
+    image quality while GAN adds high-frequency texture realism.
+
+    Args:
+        l1_w: Weight for L1 reconstruction loss (default 100.0 — Pix2Pix standard)
+        ssim_w: Weight for SSIM structural loss
+        sam_w: Weight for SAM spectral angle loss
+        gan_w: Weight for adversarial GAN loss (default 1.0)
+        gan_mode: "lsgan" or "vanilla"
+    """
+    def __init__(
+        self,
+        l1_w: float = 100.0,
+        ssim_w: float = 10.0,
+        sam_w: float = 5.0,
+        gan_w: float = 1.0,
+        gan_mode: str = "lsgan",
+    ):
+        super().__init__()
+        self.l1_w = l1_w
+        self.ssim_w = ssim_w
+        self.sam_w = sam_w
+        self.gan_w = gan_w
+        self.gan_loss = GANLoss(gan_mode=gan_mode)
+        self.l1 = L1Loss()
+        self.ssim = SSIMLoss()
+        self.sam = SAMLoss()
+
+    def generator_loss(
+        self,
+        pred: torch.Tensor,
+        gt: torch.Tensor,
+        d_pred_fake: torch.Tensor,
+    ) -> tuple:
+        l1_loss = self.l1(pred, gt)
+        ssim_loss = self.ssim(pred, gt)
+        sam_loss = self.sam(pred, gt)
+        gan_loss = self.gan_loss(d_pred_fake, is_real=True)
+
+        total = (
+            self.l1_w * l1_loss
+            + self.ssim_w * ssim_loss
+            + self.sam_w * sam_loss
+            + self.gan_w * gan_loss
+        )
+        components = {
+            "G_loss_l1": l1_loss.item(),
+            "G_loss_ssim": ssim_loss.item(),
+            "G_loss_sam": sam_loss.item(),
+            "G_loss_gan": gan_loss.item(),
+            "G_loss_total": total.item(),
+        }
+        return total, components
+
+    def discriminator_loss(
+        self,
+        d_pred_real: torch.Tensor,
+        d_pred_fake: torch.Tensor,
+    ) -> tuple:
+        d_loss_real = self.gan_loss(d_pred_real, is_real=True)
+        d_loss_fake = self.gan_loss(d_pred_fake, is_real=False)
+        total = (d_loss_real + d_loss_fake) * 0.5
+        components = {
+            "D_loss_real": d_loss_real.item(),
+            "D_loss_fake": d_loss_fake.item(),
+            "D_loss_total": total.item(),
+        }
+        return total, components
 
 
 # =============================================================================
@@ -283,8 +414,9 @@ class PerceptualLoss(nn.Module):
 # =============================================================================
 
 LOSS_REGISTRY = {
-    "hybrid":    HybridPanLoss,
-    "wavelet":   WaveletLoss,
+    "hybrid": HybridPanLoss,
+    "wavelet": WaveletLoss,
+    "pix2pix": Pix2PixLoss,
 }
 
 def get_loss(name: str, **kwargs) -> nn.Module:
