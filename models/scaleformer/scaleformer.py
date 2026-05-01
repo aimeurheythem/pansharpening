@@ -236,7 +236,10 @@ class Decoder(nn.Module):
     def __init__(self, embed_dim: int, out_ch: int, scale_ratio: int = 4):
         super().__init__()
         self.scale_ratio = scale_ratio
-        n_upsample = {4: 2, 8: 3, 16: 4}.get(scale_ratio, 2)
+        # PatchEmbed in Encoder uses patch_size=2 (2x downsample).
+        # Decoder must restore to PAN resolution → always 1 upsample (2x up).
+        # scale_ratio is the satellite PAN/MS ratio, NOT a network stride.
+        n_upsample = 1
 
         layers = []
         ch = embed_dim

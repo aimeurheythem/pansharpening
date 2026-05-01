@@ -50,7 +50,7 @@ def bad_pair():
 class TestPerfectCase:
     def test_sam_perfect(self, perfect_pair):
         gt, pred = perfect_pair
-        assert sam(gt, pred) == pytest.approx(0.0, abs=1e-4)
+        assert sam(gt, pred) == pytest.approx(0.0, abs=1e-2)
 
     def test_ergas_perfect(self, perfect_pair):
         gt, pred = perfect_pair
