@@ -12,7 +12,7 @@ model:
   ms_channels: 8
   pan_channels: 1
   base_features: 64
-  n_encoder_layers: 8
+  n_encoder_layers: 5
   dropout: 0.0
   n_disc_layers: 3
 

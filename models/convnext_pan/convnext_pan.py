@@ -144,8 +144,14 @@ class ConvNeXtEncoder(nn.Module):
             for i in range(num_blocks)
         ])
         self.norm = LayerNorm2d(embed_dim)
+        # PixelShuffle upsampling x4 = two x2 stages (avoids checkerboard artifacts)
         self.upsample = nn.Sequential(
-            nn.ConvTranspose2d(embed_dim, embed_dim, 4, 4, 0, bias=True),
+            nn.Conv2d(embed_dim, embed_dim * 4, 3, 1, 1, bias=True),  # x2 upsample
+            nn.PixelShuffle(2),
+            LayerNorm2d(embed_dim),
+            nn.GELU(),
+            nn.Conv2d(embed_dim, embed_dim * 4, 3, 1, 1, bias=True),  # x2 upsample
+            nn.PixelShuffle(2),
             LayerNorm2d(embed_dim),
         )
 
@@ -330,10 +336,6 @@ class ConvNeXtPan(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
             elif isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.ConvTranspose2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)

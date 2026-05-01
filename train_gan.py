@@ -270,6 +270,20 @@ def main():
         f"Device: [green]{device}[/green]\n"
     )
 
+    # ── WandB (optional) ───────────────────────────────────────────────────────
+    use_wandb = args.wandb
+    if use_wandb:
+        try:
+            import wandb
+            wandb.init(
+                project=cfg.project.get("name", "pansharpening_pro"),
+                name=f"{cfg.model.name}_gan",
+                config=OmegaConf.to_container(cfg, resolve=True),
+            )
+        except ImportError:
+            console.print("[yellow]WandB not installed — skipping. Run: pip install wandb[/yellow]")
+            use_wandb = False
+
     # ── Data loaders ───────────────────────────────────────────────────────────
     console.print("[yellow]Loading datasets...[/yellow]")
     dataset_name = cfg.dataset.get("name", "panbench")
@@ -411,6 +425,16 @@ def main():
                 for k, v in val_metrics.items():
                     writer.add_scalar(f"val/{k}", v, epoch)
 
+            if use_wandb:
+                import wandb
+                wandb.log({
+                    "epoch": epoch,
+                    **{f"val/{k}": v for k, v in val_metrics.items()},
+                    **{f"train/{k}": v for k, v in train_losses.items()},
+                    "train/g_lr": current_g_lr,
+                    "train/d_lr": current_d_lr,
+                })
+
             elapsed = time.time() - t0
             console.print(
                 f"Epoch [{epoch+1:4d}/{cfg.training.epochs}] "
@@ -454,6 +478,9 @@ def main():
     )
     if writer:
         writer.close()
+    if use_wandb:
+        import wandb
+        wandb.finish()
 
 
 if __name__ == "__main__":

@@ -242,7 +242,8 @@ class Decoder(nn.Module):
         ch = embed_dim
         for _ in range(n_upsample):
             layers += [
-                nn.ConvTranspose2d(ch, ch // 2, 4, 2, 1),
+                nn.Conv2d(ch, ch * 2, 3, 1, 1),  # expand channels for PixelShuffle
+                nn.PixelShuffle(2),               # (ch*2, H, W) → (ch//2, 2H, 2W)
                 nn.BatchNorm2d(ch // 2),
                 nn.GELU(),
             ]
