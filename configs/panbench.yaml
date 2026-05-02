@@ -15,10 +15,9 @@ model:
   num_blocks: 4
 
 dataset:
-  name: "panbench"
-  h5_train: "./data/h5/train_wv3.h5"
-  h5_val:   "./data/h5/valid_wv3.h5"
-  h5_test:  "./data/h5/test_wv3.h5"
+  h5_train: "E:/pansharpening_h5/train_wv3.h5"
+  h5_val:   "E:/pansharpening_h5/valid_wv3.h5"
+  h5_test:  "E:/pansharpening_h5/test_wv3.h5"
   satellites:
     - wv3                    # WorldView-3 (8 bands)
     - gf2                    # GaoFen-2 (4 bands)

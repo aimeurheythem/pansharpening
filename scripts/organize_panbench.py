@@ -91,7 +91,7 @@ def organize_satellite(satellite_dir, satellite_name="wv3", split_ratios=(0.8, 0
             if not ms_copied:
                 print(f"Warning: No MS file found for {base_name}")
     
-    print(f"✓ Organized {satellite_name}")
+    print(f"[OK] Organized {satellite_name}")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -111,7 +111,7 @@ def main():
             print(f"\nSatellite directory not found: {sat_dir}")
     
     print(f"\n{'='*60}")
-    print("✓ Organization complete!")
+    print("[OK] Organization complete!")
     print(f"\nNext step: Run prepare_h5.py")
     print(f"Example:")
     print(f"  python scripts/prepare_h5.py --dataset wv3 --raw_dir data/raw/PanBench/WV3")
