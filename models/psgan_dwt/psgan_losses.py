@@ -92,7 +92,14 @@ class PSGANDualSAMLoss(nn.Module):
             align_corners=False,
             antialias=True,
         )
-        sam_down = PSGANSAMLoss()(pred_down, lrms)
+        lrms_down = F.interpolate(
+            lrms,
+            size=pred_down.shape[2:],
+            mode="bicubic",
+            align_corners=False,
+            antialias=True,
+        )
+        sam_down = PSGANSAMLoss()(pred_down, lrms_down)
         return 0.5 * sam_full + 0.5 * sam_down
 
 
@@ -104,36 +111,26 @@ class PSGANPerceptualLoss(nn.Module):
     def __init__(self, generator: nn.Module):
         super().__init__()
         self.generator = generator
-        self._features_real = None
-        self._features_fake = None
-        self._hook_registered = False
-
-    def _hook_fn(self, module, input, output):
-        self._features_fake = output
-
-    def register_hook(self, layer_idx: int = -1):
-        if not self._hook_registered:
-            self.generator.ms_encoder[layer_idx].register_forward_hook(self._hook_fn)
-            self._hook_registered = True
 
     def forward(
         self,
         pred_hrms: torch.Tensor,
         real_hrms: torch.Tensor,
     ) -> torch.Tensor:
-        self._features_fake = None
-        self._features_real = None
+        def _encode(img):
+            from utils.losses import HaarDWT2D
+            dwt = HaarDWT2D()
+            _, LH, HL, HH = dwt(img)
+            x = torch.cat([LH, HL, HH], dim=1)
+            feats = []
+            for layer in self.generator.ms_encoder:
+                x = layer(x)
+                feats.append(x)
+            return feats[-1]
 
-        with torch.no_grad():
-            _ = self.generator.encoder[0](pred_hrms)
-
-        if self._features_fake is None:
-            return torch.tensor(0.0, device=pred_hrms.device)
-
-        if self._features_real is None:
-            return F.mse_loss(self._features_fake, torch.zeros_like(self._features_fake))
-
-        return F.mse_loss(self._features_fake, self._features_real)
+        feat_pred = _encode(pred_hrms)
+        feat_real = _encode(real_hrms.detach())
+        return F.mse_loss(feat_pred, feat_real)
 
 
 class PSGANGramPerceptualLoss(nn.Module):
