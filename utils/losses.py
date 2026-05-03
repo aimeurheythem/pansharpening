@@ -419,6 +419,12 @@ LOSS_REGISTRY = {
     "pix2pix": Pix2PixLoss,
 }
 
+try:
+    from models.psgan_dwt.psgan_losses import PSGANDWTLoss
+    LOSS_REGISTRY["psgan_dwt"] = PSGANDWTLoss
+except ImportError:
+    pass
+
 def get_loss(name: str, **kwargs) -> nn.Module:
     """
     Factory function to instantiate loss by name.

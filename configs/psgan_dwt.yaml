@@ -1,0 +1,51 @@
+# =============================================================================
+# PSGAN-DWT CONFIG
+# Two-Stream Wavelet U-Net GAN for Pansharpening
+# Reference: PSGAN (Liu et al., ICIP 2018) + DWT domain extension
+# =============================================================================
+
+defaults:
+  - base
+
+model:
+  name: "psgan_dwt"
+  ms_channels: 8           # WV3 has 8 MS bands (change to 4 for GF2/QB)
+  pan_channels: 1
+  base_features: 64
+  n_levels: 3              # encoder depth (3 = balanced capacity vs. speed)
+  dropout: 0.0
+  n_disc_layers: 3
+
+dataset:
+  name: "panbench"
+  h5_train: "./data/h5/train_wv3.h5"
+  h5_val:   "./data/h5/valid_wv3.h5"
+  h5_test:  "./data/h5/test_wv3.h5"
+  satellites:
+    - wv3
+  scale_ratio: 4
+
+training:
+  epochs: 200
+  batch_size: 8
+  accum_steps: 4
+  warmup_epochs: 10
+
+optimizer:
+  name: "adamw"
+  lr: 2.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.5, 0.999]      # β1=0.5 is critical for GAN stability
+
+scheduler:
+  name: "cosine_warmup"
+  eta_min: 1.0e-6
+
+loss:
+  name: "psgan_dwt"
+  alpha: 1.0               # adversarial weight in L(G)
+  beta: 100.0              # L1 weight in L(G)
+  eta1: 1.0                # L(G) weight in final loss
+  eta2: 0.1                # regularizer weight in final loss
+  regularizer: "gram_recon"  # best per paper Table I
+  # Options: sam | sam_dual | perceptual | gram_perc | gram_recon | all
