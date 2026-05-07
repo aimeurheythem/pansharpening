@@ -85,6 +85,8 @@ class PSGANDualSAMLoss(nn.Module):
         lrms: torch.Tensor,
     ) -> torch.Tensor:
         sam_full = PSGANSAMLoss()(pred, gt)
+        # Downsample BOTH pred and lrms to the same reduced resolution
+        # (lrms in data pipeline is already upsampled to PAN resolution)
         pred_down = F.interpolate(
             pred,
             scale_factor=1 / self.scale,
@@ -111,13 +113,30 @@ class PSGANPerceptualLoss(nn.Module):
     def __init__(self, generator: nn.Module):
         super().__init__()
         self.generator = generator
+        self._features_real = None
+        self._features_fake = None
+        self._hook_registered = False
+
+    def _hook_fn(self, module, input, output):
+        self._features_fake = output
+
+    def register_hook(self, layer_idx: int = -1):
+        if not self._hook_registered:
+            self.generator.ms_encoder[layer_idx].register_forward_hook(self._hook_fn)
+            self._hook_registered = True
 
     def forward(
         self,
         pred_hrms: torch.Tensor,
         real_hrms: torch.Tensor,
     ) -> torch.Tensor:
+        """
+        Extract bottleneck features from ms_encoder by partial forward pass.
+        Compare features of pred vs real via MSE (L2 distance).
+        """
+        # Extract features for fake image
         def _encode(img):
+            # Run through ms_encoder using HF subbands of the image itself
             from utils.losses import HaarDWT2D
             dwt = HaarDWT2D()
             _, LH, HL, HH = dwt(img)
@@ -126,10 +145,10 @@ class PSGANPerceptualLoss(nn.Module):
             for layer in self.generator.ms_encoder:
                 x = layer(x)
                 feats.append(x)
-            return feats[-1]
+            return feats[-1]  # bottleneck features
 
         feat_pred = _encode(pred_hrms)
-        feat_real = _encode(real_hrms.detach())
+        feat_real = _encode(real_hrms.detach())  # detach real to avoid unnecessary graph
         return F.mse_loss(feat_pred, feat_real)
 
 
