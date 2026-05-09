@@ -21,7 +21,6 @@ data/raw/
 *.zip
 
 # Checkpoints (track best ones manually)
-checkpoints/
 !checkpoints/.gitkeep
 
 # Logs

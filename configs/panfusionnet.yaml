@@ -18,13 +18,10 @@ model:
   dropout: 0.0
 
 dataset:
-  name: "panbench"
-  h5_train: "./data/h5/train_wv3.h5"
-  h5_val:   "./data/h5/valid_wv3.h5"
-  h5_test:  "./data/h5/test_wv3.h5"
-  satellites:
-    - wv3
+  name: "panscale"
+  root: "D:/datasets/panscale"
   scale_ratio: 4
+  patch_size: 128
 
 training:
   epochs: 200

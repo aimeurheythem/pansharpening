@@ -76,23 +76,25 @@ console = Console()
 # SEEDING
 # =============================================================================
 
+
 def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark     = False
+    torch.backends.cudnn.benchmark = False
 
 
 # =============================================================================
 # SCHEDULER: Linear warmup + cosine decay (no external library needed)
 # =============================================================================
 
+
 def get_cosine_warmup_scheduler(
     optimizer,
     warmup_epochs: int,
-    total_epochs:  int,
+    total_epochs: int,
     eta_min_ratio: float = 1e-3,
 ):
     """
@@ -109,13 +111,14 @@ def get_cosine_warmup_scheduler(
         total_epochs:   Total training epochs
         eta_min_ratio:  Final LR = base_lr * eta_min_ratio
     """
+
     def lr_lambda(epoch: int) -> float:
         if epoch < warmup_epochs:
             # Linear warmup: 1/W, 2/W, ..., W/W
             return float(epoch + 1) / float(max(1, warmup_epochs))
         # Cosine annealing from 1.0 down to eta_min_ratio
         progress = (epoch - warmup_epochs) / max(1, total_epochs - warmup_epochs)
-        cosine   = 0.5 * (1.0 + math.cos(math.pi * progress))
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
         return eta_min_ratio + (1.0 - eta_min_ratio) * cosine
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -124,6 +127,7 @@ def get_cosine_warmup_scheduler(
 # =============================================================================
 # CHECKPOINT UTILITIES
 # =============================================================================
+
 
 def save_checkpoint(state: dict, path: Path, is_best: bool = False):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,26 +159,27 @@ def load_checkpoint(path: str, model: nn.Module, optimizer=None, scheduler=None)
 #         here ensures metrics (SAM, ERGAS, PSNR, SSIM) are always correct.
 # =============================================================================
 
+
 @torch.no_grad()
 def validate(model, loader, device, cfg) -> dict:
     model.eval()
     tracker = MetricTracker()
 
     for batch in loader:
-        pan  = batch["pan"].to(device)
+        pan = batch["pan"].to(device)
         lrms = batch["lrms"].to(device)
-        gt   = batch["gt"].to(device)
+        gt = batch["gt"].to(device)
 
         with autocast(enabled=cfg.hardware.fp16):
             pred = model(pan, lrms)
 
         # FIX 1: Explicit clamp before numpy — guards against FP16 precision drift
         pred = pred.float().clamp(0.0, 1.0)
-        gt   = gt.float().clamp(0.0, 1.0)
+        gt = gt.float().clamp(0.0, 1.0)
 
         pred_np = pred.cpu().numpy()
-        gt_np   = gt.cpu().numpy()
-        scale   = cfg.dataset.get("scale_ratio", 4)
+        gt_np = gt.cpu().numpy()
+        scale = cfg.dataset.get("scale_ratio", 4)
         tracker.update_batch(gt_np, pred_np, ratio=scale)
 
     return tracker.compute()
@@ -185,21 +190,29 @@ def validate(model, loader, device, cfg) -> dict:
 # FIX 4: Gradient accumulation via accum_steps.
 # =============================================================================
 
+
 def train_one_epoch(
-    model, loader, optimizer, loss_fn, scaler, device, cfg,
-    epoch: int, writer: Optional[object] = None,
+    model,
+    loader,
+    optimizer,
+    loss_fn,
+    scaler,
+    device,
+    cfg,
+    epoch: int,
+    writer: Optional[object] = None,
 ) -> dict:
     model.train()
     loss_components_sum = {}
-    n_batches   = len(loader)
+    n_batches = len(loader)
     accum_steps = cfg.training.get("accum_steps", 1)  # FIX 4: gradient accumulation
 
     optimizer.zero_grad(set_to_none=True)
 
     for i, batch in enumerate(loader):
-        pan  = batch["pan"].to(device)
+        pan = batch["pan"].to(device)
         lrms = batch["lrms"].to(device)
-        gt   = batch["gt"].to(device)
+        gt = batch["gt"].to(device)
 
         with autocast(enabled=cfg.hardware.fp16):
             pred = model(pan, lrms)
@@ -237,16 +250,21 @@ def train_one_epoch(
 # MAIN
 # =============================================================================
 
+
 def main():
     parser = argparse.ArgumentParser(description="Train pansharpening model")
-    parser.add_argument("--config",  type=str, required=True, help="Path to YAML config")
-    parser.add_argument("--resume",  type=str, default=None,  help="Resume from checkpoint")
-    parser.add_argument("--wandb",   action="store_true",     help="Enable WandB logging")
-    parser.add_argument("--device",  type=str, default=None,  help="Override device (cuda/cpu)")
+    parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
+    parser.add_argument(
+        "--resume", type=str, default=None, help="Resume from checkpoint"
+    )
+    parser.add_argument("--wandb", action="store_true", help="Enable WandB logging")
+    parser.add_argument(
+        "--device", type=str, default=None, help="Override device (cuda/cpu)"
+    )
     args = parser.parse_args()
 
     # ── Load config ────────────────────────────────────────────────────────────
-    base_cfg  = OmegaConf.load("configs/base.yaml")
+    base_cfg = OmegaConf.load("configs/base.yaml")
     model_cfg = OmegaConf.load(args.config)
     cfg = OmegaConf.merge(base_cfg, model_cfg)
 
@@ -267,12 +285,22 @@ def main():
 
     if dataset_name == "panbench":
         loaders = get_panbench_loaders(
-            h5_train   = cfg.dataset.h5_train,
-            h5_val     = cfg.dataset.h5_val,
-            h5_test    = cfg.dataset.get("h5_test", None),
-            satellite  = cfg.dataset.get("satellites", ["wv3"])[0],
-            batch_size = cfg.training.batch_size,
-            num_workers= cfg.hardware.num_workers,
+            h5_train=cfg.dataset.h5_train,
+            h5_val=cfg.dataset.h5_val,
+            h5_test=cfg.dataset.get("h5_test", None),
+            satellite=cfg.dataset.get("satellites", ["wv3"])[0],
+            batch_size=cfg.training.batch_size,
+            num_workers=cfg.hardware.num_workers,
+        )
+    elif dataset_name == "panscale":
+        from data.datasets.panscale import get_panscale_loaders
+
+        loaders = get_panscale_loaders(
+            root=cfg.dataset.root,
+            batch_size=cfg.training.batch_size,
+            patch_size=cfg.dataset.get("patch_size", 128),
+            num_workers=cfg.hardware.num_workers,
+            scale_ratio=cfg.dataset.get("scale_ratio", 4),
         )
     else:
         raise NotImplementedError(
@@ -281,7 +309,7 @@ def main():
         )
 
     accum_steps = cfg.training.get("accum_steps", 1)
-    eff_batch   = cfg.training.batch_size * accum_steps
+    eff_batch = cfg.training.batch_size * accum_steps
     console.print(
         f"  Train: {len(loaders['train'].dataset):,} samples | "
         f"Val: {len(loaders['val'].dataset):,} samples\n"
@@ -296,8 +324,9 @@ def main():
 
     # ── Loss ───────────────────────────────────────────────────────────────────
     loss_cfg = OmegaConf.to_container(cfg.get("loss", {}), resolve=True)
-    loss_fn  = get_loss("hybrid", **{k: v for k, v in loss_cfg.items()
-                                        if k.endswith("_weight")})
+    loss_fn = get_loss(
+        "hybrid", **{k: v for k, v in loss_cfg.items() if k.endswith("_weight")}
+    )
 
     # ── Optimizer ──────────────────────────────────────────────────────────────
     opt_cfg = cfg.optimizer
@@ -312,9 +341,9 @@ def main():
     warmup_epochs = cfg.training.get("warmup_epochs", 10)
     scheduler = get_cosine_warmup_scheduler(
         optimizer,
-        warmup_epochs = warmup_epochs,
-        total_epochs  = cfg.training.epochs,
-        eta_min_ratio = cfg.scheduler.eta_min / opt_cfg.lr,  # ratio form
+        warmup_epochs=warmup_epochs,
+        total_epochs=cfg.training.epochs,
+        eta_min_ratio=cfg.scheduler.eta_min / opt_cfg.lr,  # ratio form
     )
     console.print(
         f"  Scheduler: {warmup_epochs} epoch warmup → cosine decay "
@@ -326,12 +355,12 @@ def main():
 
     # ── Logging ────────────────────────────────────────────────────────────────
     ckpt_dir = Path(cfg.paths.checkpoints) / cfg.model.name
-    log_dir  = Path(cfg.paths.logs) / "tensorboard" / cfg.model.name
-    writer   = SummaryWriter(log_dir=str(log_dir)) if cfg.logging.tensorboard else None
+    log_dir = Path(cfg.paths.logs) / "tensorboard" / cfg.model.name
+    writer = SummaryWriter(log_dir=str(log_dir)) if cfg.logging.tensorboard else None
 
     # ── Resume ─────────────────────────────────────────────────────────────────
     start_epoch = 0
-    best_ergas  = float("inf")
+    best_ergas = float("inf")
     patience_counter = 0
 
     if args.resume:
@@ -349,7 +378,15 @@ def main():
 
         # Train
         train_losses = train_one_epoch(
-            model, loaders["train"], optimizer, loss_fn, scaler, device, cfg, epoch, writer
+            model,
+            loaders["train"],
+            optimizer,
+            loss_fn,
+            scaler,
+            device,
+            cfg,
+            epoch,
+            writer,
         )
 
         # FIX 6 + FIX 7: Log LR and train losses EVERY epoch (not just at val_interval).
@@ -362,12 +399,12 @@ def main():
 
         # Validate every val_interval epochs
         if (epoch + 1) % cfg.training.val_interval == 0:
-            val_metrics   = validate(model, loaders["val"], device, cfg)
+            val_metrics = validate(model, loaders["val"], device, cfg)
             current_ergas = val_metrics.get("ERGAS", float("inf"))
-            is_best       = current_ergas < best_ergas
+            is_best = current_ergas < best_ergas
 
             if is_best:
-                best_ergas   = current_ergas
+                best_ergas = current_ergas
                 patience_counter = 0
             else:
                 patience_counter += 1
@@ -378,7 +415,7 @@ def main():
 
             elapsed = time.time() - t0
             console.print(
-                f"Epoch [{epoch+1:4d}/{cfg.training.epochs}] "
+                f"Epoch [{epoch + 1:4d}/{cfg.training.epochs}] "
                 f"Loss={train_losses.get('loss_total', 0):.4f} | "
                 f"LR={current_lr:.2e} | "
                 f"SAM={val_metrics.get('SAM', 0):.3f}° | "
@@ -392,20 +429,20 @@ def main():
             if (epoch + 1) % cfg.training.save_interval == 0 or is_best:
                 save_checkpoint(
                     {
-                        "epoch":       epoch,
-                        "model":       model.state_dict(),
-                        "optimizer":   optimizer.state_dict(),
-                        "scheduler":   scheduler.state_dict(),
+                        "epoch": epoch,
+                        "model": model.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                        "scheduler": scheduler.state_dict(),
                         "best_metric": best_ergas,
                         "val_metrics": val_metrics,
-                        "cfg":         OmegaConf.to_container(cfg),
+                        "cfg": OmegaConf.to_container(cfg),
                     },
-                    ckpt_dir / f"epoch_{epoch+1:04d}.pth",
+                    ckpt_dir / f"epoch_{epoch + 1:04d}.pth",
                     is_best=is_best,
                 )
 
             if patience_counter >= cfg.training.early_stopping_patience:
-                console.print(f"\n[red]Early stopping at epoch {epoch+1}[/red]")
+                console.print(f"\n[red]Early stopping at epoch {epoch + 1}[/red]")
                 break
 
         scheduler.step()

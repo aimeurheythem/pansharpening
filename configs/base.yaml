@@ -18,14 +18,14 @@ paths:
   outputs: "./outputs"
 
 hardware:
-  device: "cuda"             # cuda | cpu
-  num_workers: 4
-  pin_memory: true
-  fp16: true                 # Mixed precision (saves ~40% GPU memory)
+  device: "cpu"             # cuda | cpu
+  num_workers: 2
+  pin_memory: false
+  fp16: false                # Mixed precision (saves ~40% GPU memory)
 
 training:
-  epochs: 200
-  batch_size: 32
+  epochs: 50
+  batch_size: 8
   val_interval: 5            # Validate every N epochs
   save_interval: 10
   early_stopping_patience: 30
